@@ -5,6 +5,7 @@ interface Departure {
   time: string;
   minutes_away: number;
   delay_seconds: number | null;
+  destination: string | null;
 }
 
 interface LineData {
@@ -150,7 +151,10 @@ function App() {
                   return d.text ? <span className={`delay-tag ${d.className}`}>{d.text}</span> : null;
                 })()}
               </div>
-              <span className="dep-away">{formatMinutes(dep.minutes_away)}</span>
+              <div className="dep-right">
+                {dep.destination && <span className="dep-dest">{dep.destination}</span>}
+                <span className="dep-away">{formatMinutes(dep.minutes_away)}</span>
+              </div>
             </li>
           ))}
         </ul>

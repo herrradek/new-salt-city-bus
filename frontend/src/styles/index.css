@@ -31,7 +31,7 @@ body {
   max-width: 480px;
   margin: 0 auto;
   padding: 16px;
-  padding-bottom: 80px;
+  padding-bottom: 100px;
 }
 
 /* Header */
@@ -188,6 +188,24 @@ body {
   font-size: 1.05rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.dep-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.dep-dest {
+  color: var(--text-dim);
+  font-size: 0.65rem;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.dep-dest::first-letter {
+  text-transform: uppercase;
 }
 
 .dep-away {

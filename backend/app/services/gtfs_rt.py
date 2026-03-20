@@ -33,13 +33,16 @@ MPK_TO_GTFS_STOPS = {
 }
 
 # --- GTFS Static Data (loaded once) ---
-# Maps: (route_id, trip_id) -> direction_id
+# Maps: trip_id -> direction_id
 _trip_directions: Dict[str, str] = {}
+# Maps: trip_id -> trip_headsign (destination)
+_trip_headsigns: Dict[str, str] = {}
 # Maps: (trip_id, stop_id) -> scheduled arrival time string
 _trip_stop_times: Dict[Tuple[str, str], str] = {}
 # Set of trip_ids for routes 53A, 53B
 _relevant_trip_ids: Set[str] = set()
 _static_loaded = False
+_last_gtfs_check: float = 0
 
 # --- RT cache ---
 # Maps: (route_id, commute_id) -> list of {trip_id, delay_seconds, stop_id}
@@ -59,11 +62,11 @@ async def _download(url: str) -> bytes:
     return stdout
 
 
-def _load_static_gtfs():
+def _load_static_gtfs(force: bool = False):
     """Load route/trip/stop mappings from static GTFS ZIP."""
-    global _static_loaded, _trip_directions, _relevant_trip_ids, _trip_stop_times
+    global _static_loaded, _trip_directions, _trip_headsigns, _relevant_trip_ids, _trip_stop_times
 
-    if _static_loaded:
+    if _static_loaded and not force:
         return
 
     if not GTFS_ZIP_PATH.exists():
@@ -76,33 +79,103 @@ def _load_static_gtfs():
             text = f.read().decode("utf-8-sig")
             return list(csv.DictReader(io.StringIO(text)))
 
-    # Load trips for 53A/53B
+    new_directions: Dict[str, str] = {}
+    new_headsigns: Dict[str, str] = {}
+    new_trip_ids: Set[str] = set()
+    new_stop_times: Dict[Tuple[str, str], str] = {}
+
     for row in read_csv_file("trips.txt"):
         if row["route_id"] in ("53A", "53B"):
-            _trip_directions[row["trip_id"]] = row["direction_id"]
-            _relevant_trip_ids.add(row["trip_id"])
+            new_directions[row["trip_id"]] = row["direction_id"]
+            new_headsigns[row["trip_id"]] = row.get("trip_headsign", "")
+            new_trip_ids.add(row["trip_id"])
 
-    # Load stop_times for relevant trips at our stops
     all_gtfs_stop_ids = set()
     for cfg in MPK_TO_GTFS_STOPS.values():
         all_gtfs_stop_ids.update(cfg["gtfs_stop_ids"])
 
     for row in read_csv_file("stop_times.txt"):
-        if row["trip_id"] in _relevant_trip_ids and row["stop_id"] in all_gtfs_stop_ids:
-            _trip_stop_times[(row["trip_id"], row["stop_id"])] = row["arrival_time"]
+        if row["trip_id"] in new_trip_ids and row["stop_id"] in all_gtfs_stop_ids:
+            new_stop_times[(row["trip_id"], row["stop_id"])] = row["arrival_time"]
 
+    _trip_directions.clear()
+    _trip_directions.update(new_directions)
+    _trip_headsigns.clear()
+    _trip_headsigns.update(new_headsigns)
+    _relevant_trip_ids.clear()
+    _relevant_trip_ids.update(new_trip_ids)
+    _trip_stop_times.clear()
+    _trip_stop_times.update(new_stop_times)
     _static_loaded = True
 
 
+def _should_check_for_update() -> bool:
+    """Check shortly after midnight (00:05) if GTFS.zip has been updated."""
+    global _last_gtfs_check
+    now = time.time()
+
+    # Don't check more than once per hour
+    if now - _last_gtfs_check < 3600:
+        return False
+
+    from datetime import datetime
+    dt = datetime.now()
+    # Check between 00:05 and 01:00
+    if dt.hour == 0 and dt.minute >= 5:
+        _last_gtfs_check = now
+        return True
+
+    # Also check if file doesn't exist yet
+    if not GTFS_ZIP_PATH.exists():
+        _last_gtfs_check = now
+        return True
+
+    return False
+
+
 async def ensure_static_gtfs():
-    """Download GTFS.zip if not present, then load it."""
+    """Download GTFS.zip if missing or potentially updated (nightly check)."""
     if not GTFS_ZIP_PATH.exists():
         try:
             data = await _download(GTFS_STATIC_URL)
             GTFS_ZIP_PATH.write_bytes(data)
+            _load_static_gtfs(force=True)
         except Exception:
-            return
+            pass
+        return
+
     _load_static_gtfs()
+
+    if _should_check_for_update():
+        try:
+            # Use If-Modified-Since via curl to avoid re-downloading if unchanged
+            mtime = GTFS_ZIP_PATH.stat().st_mtime
+            from datetime import datetime, timezone
+            last_mod = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime(
+                "%a, %d %b %Y %H:%M:%S GMT"
+            )
+            proc = await asyncio.create_subprocess_exec(
+                "curl", "-sL", "--max-time", "60",
+                "-H", f"If-Modified-Since: {last_mod}",
+                "-o", str(GTFS_ZIP_PATH) + ".new",
+                "-w", "%{http_code}",
+                GTFS_STATIC_URL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            status = stdout.decode().strip()
+
+            new_path = Path(str(GTFS_ZIP_PATH) + ".new")
+            if status == "200" and new_path.exists() and new_path.stat().st_size > 1_000_000:
+                # New file downloaded — swap and reload
+                new_path.replace(GTFS_ZIP_PATH)
+                _load_static_gtfs(force=True)
+            else:
+                # 304 Not Modified or failed — clean up
+                new_path.unlink(missing_ok=True)
+        except Exception:
+            Path(str(GTFS_ZIP_PATH) + ".new").unlink(missing_ok=True)
 
 
 async def fetch_rt_delays():
@@ -261,4 +334,43 @@ def get_delay_for_departure(
                 except ValueError:
                     pass
 
+    return None
+
+
+def _find_trip_for_time(route_id: str, commute_id: str, hhmm: str) -> Optional[str]:
+    """Find a trip_id that serves our stop at the given HH:MM."""
+    cfg = MPK_TO_GTFS_STOPS.get((route_id, commute_id))
+    if not cfg:
+        return None
+
+    sched_mins = int(hhmm[:2]) * 60 + int(hhmm[3:5])
+
+    for (trip_id, stop_id), arr_time in _trip_stop_times.items():
+        if stop_id not in cfg["gtfs_stop_ids"]:
+            continue
+        if trip_id not in _relevant_trip_ids:
+            continue
+        if _trip_directions.get(trip_id) != cfg["direction_id"]:
+            continue
+        try:
+            trip_mins = int(arr_time[:2]) * 60 + int(arr_time[3:5])
+            if abs(trip_mins - sched_mins) <= 3:
+                return trip_id
+        except ValueError:
+            pass
+
+    return None
+
+
+def get_headsign_for_departure(
+    route_id: str,
+    commute_id: str,
+    scheduled_time: str,
+) -> Optional[str]:
+    """Get destination headsign for a departure by matching to a GTFS trip."""
+    if not _static_loaded:
+        return None
+    trip_id = _find_trip_for_time(route_id, commute_id, scheduled_time[:5])
+    if trip_id:
+        return _trip_headsigns.get(trip_id)
     return None

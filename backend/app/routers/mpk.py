@@ -3,17 +3,18 @@ from datetime import datetime
 from fastapi import APIRouter
 
 from backend.app.core.mpk_config import COMMUTES, NEXT_DEPARTURES_COUNT
-from backend.app.services.gtfs_rt import fetch_rt_delays, get_delay_for_departure
+from backend.app.services.gtfs_rt import fetch_rt_delays, get_delay_for_departure, get_headsign_for_departure
 from backend.app.services.mpk_scraper import get_next_departures, _get_day_type
 
 router = APIRouter(prefix="/api/mpk", tags=["mpk"])
 
 
-async def _enrich_with_delays(commute_id: str, line_name: str, departures: list) -> list:
-    """Add delay_seconds to each departure from GTFS-RT data."""
+async def _enrich_departures(commute_id: str, line_name: str, departures: list) -> list:
+    """Add delay_seconds and destination to each departure."""
     for dep in departures:
-        delay = get_delay_for_departure(line_name, commute_id, dep.get("time", ""))
-        dep["delay_seconds"] = delay  # None = no data, 0 = on time, >0 = late, <0 = early
+        t = dep.get("time", "")
+        dep["delay_seconds"] = get_delay_for_departure(line_name, commute_id, t)
+        dep["destination"] = get_headsign_for_departure(line_name, commute_id, t)
     return departures
 
 
@@ -38,7 +39,7 @@ async def departures():
                 stop_number=line_cfg["stop_number"],
                 count=NEXT_DEPARTURES_COUNT,
             )
-            await _enrich_with_delays(commute["id"], line_cfg["line_name"], next_deps)
+            await _enrich_departures(commute["id"], line_cfg["line_name"], next_deps)
             commute_data["lines"].append({
                 "line_name": line_cfg["line_name"],
                 "stop_name": line_cfg["stop_name"],
@@ -74,7 +75,7 @@ async def departures_by_commute(commute_id: str):
             stop_number=line_cfg["stop_number"],
             count=NEXT_DEPARTURES_COUNT,
         )
-        await _enrich_with_delays(commute["id"], line_cfg["line_name"], next_deps)
+        await _enrich_departures(commute["id"], line_cfg["line_name"], next_deps)
         lines.append({
             "line_name": line_cfg["line_name"],
             "stop_name": line_cfg["stop_name"],
