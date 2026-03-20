@@ -10,6 +10,7 @@ from starlette.responses import Response
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
 from backend.app.routers import health, mpk
+from backend.app.services.gtfs_rt import start_background_gtfs
 
 _frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
@@ -34,6 +35,7 @@ app.include_router(mpk.router)
 @app.on_event("startup")
 async def startup():
     logger.info("Application starting", extra={"env": settings.app_env})
+    await start_background_gtfs()
 
 
 # Serve frontend static files if the build exists

@@ -135,13 +135,23 @@ def _should_check_for_update() -> bool:
 
 async def ensure_static_gtfs():
     """Download GTFS.zip if missing or potentially updated (nightly check)."""
+    GTFS_ZIP_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not GTFS_ZIP_PATH.exists():
         try:
-            data = await _download(GTFS_STATIC_URL)
-            GTFS_ZIP_PATH.write_bytes(data)
+            # Download directly to disk to avoid holding 11MB in memory
+            proc = await asyncio.create_subprocess_exec(
+                "curl", "-sL", "--max-time", "60", "-o", str(GTFS_ZIP_PATH),
+                GTFS_STATIC_URL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            if proc.returncode != 0 or not GTFS_ZIP_PATH.exists():
+                GTFS_ZIP_PATH.unlink(missing_ok=True)
+                return
             _load_static_gtfs(force=True)
         except Exception:
-            pass
+            GTFS_ZIP_PATH.unlink(missing_ok=True)
         return
 
     _load_static_gtfs()
@@ -178,6 +188,26 @@ async def ensure_static_gtfs():
             Path(str(GTFS_ZIP_PATH) + ".new").unlink(missing_ok=True)
 
 
+_bg_gtfs_task_started = False
+
+
+async def start_background_gtfs():
+    """Start GTFS download in background (called from app startup)."""
+    global _bg_gtfs_task_started
+    if _bg_gtfs_task_started:
+        return
+    _bg_gtfs_task_started = True
+    asyncio.create_task(_background_gtfs_init())
+
+
+async def _background_gtfs_init():
+    """Download and load GTFS data in background, non-blocking."""
+    try:
+        await ensure_static_gtfs()
+    except Exception:
+        pass
+
+
 async def fetch_rt_delays():
     """Fetch trip_updates.bin and extract delays for 53A/53B at our stops."""
     global _rt_delays, _rt_timestamp
@@ -185,7 +215,6 @@ async def fetch_rt_delays():
     if time.time() - _rt_timestamp < RT_POLL_INTERVAL:
         return _rt_delays
 
-    await ensure_static_gtfs()
     if not _static_loaded:
         return _rt_delays
 
