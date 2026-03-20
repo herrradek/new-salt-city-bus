@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -7,7 +10,7 @@ from backend.app.core.logging import logger
 from backend.app.routers import health, mpk
 
 app = FastAPI(
-    title="GFT Platform",
+    title="New Salt City Bus",
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
 )
@@ -29,5 +32,7 @@ async def startup():
     logger.info("Application starting", extra={"env": settings.app_env})
 
 
-# In production, serve frontend static files
-# app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend")
+# Serve frontend static files when the build exists
+_frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+if _frontend_dist.is_dir():
+    app.mount("/", StaticFiles(directory=str(_frontend_dist), html=True), name="frontend")

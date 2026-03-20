@@ -1,0 +1,12 @@
+.venv/
+venv/
+node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+.git/
+.env
+.env.local
+docker-data/
+.DS_Store
+backend/app/data/GTFS.zip

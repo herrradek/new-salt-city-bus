@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: new-salt-city-bus
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: APP_ENV
+        value: production
