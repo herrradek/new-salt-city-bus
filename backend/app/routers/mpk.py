@@ -1,8 +1,10 @@
+from datetime import datetime
+
 from fastapi import APIRouter
 
 from backend.app.core.mpk_config import COMMUTES, NEXT_DEPARTURES_COUNT
 from backend.app.services.gtfs_rt import fetch_rt_delays, get_delay_for_departure
-from backend.app.services.mpk_scraper import get_next_departures
+from backend.app.services.mpk_scraper import get_next_departures, _get_day_type
 
 router = APIRouter(prefix="/api/mpk", tags=["mpk"])
 
@@ -45,7 +47,13 @@ async def departures():
 
         results.append(commute_data)
 
-    return {"commutes": results}
+    now = datetime.now()
+    return {
+        "commutes": results,
+        "schedule_type": _get_day_type(),
+        "date": now.strftime("%Y-%m-%d"),
+        "day_of_week": now.strftime("%A"),
+    }
 
 
 @router.get("/departures/{commute_id}")

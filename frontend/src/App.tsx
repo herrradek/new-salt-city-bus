@@ -21,6 +21,9 @@ interface Commute {
 
 interface ApiResponse {
   commutes: Commute[];
+  schedule_type: string;
+  date: string;
+  day_of_week: string;
 }
 
 interface MergedDeparture extends Departure {
@@ -50,6 +53,7 @@ function formatMinutes(min: number): string {
 
 function App() {
   const [commutes, setCommutes] = useState<Commute[]>([]);
+  const [scheduleInfo, setScheduleInfo] = useState<{ type: string; date: string; day: string } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +65,7 @@ function App() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: ApiResponse = await res.json();
       setCommutes(data.commutes);
+      setScheduleInfo({ type: data.schedule_type, date: data.date, day: data.day_of_week });
       setError(null);
       setLastUpdated(new Date());
     } catch (e) {
@@ -153,8 +158,17 @@ function App() {
 
       {lastUpdated && (
         <footer className="footer">
-          Updated {lastUpdated.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })}
-          <button className="refresh-btn" onClick={fetchData}>Refresh</button>
+          <div className="footer-top">
+            {scheduleInfo && (
+              <span className="schedule-info">
+                {scheduleInfo.date} ({scheduleInfo.day}) &middot; {scheduleInfo.type}
+              </span>
+            )}
+          </div>
+          <div className="footer-bottom">
+            <span>Updated {lastUpdated.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })}</span>
+            <button className="refresh-btn" onClick={fetchData}>Refresh</button>
+          </div>
         </footer>
       )}
     </div>
