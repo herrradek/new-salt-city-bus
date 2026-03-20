@@ -37,6 +37,6 @@ _frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "d
 if _frontend_dist.is_dir():
     app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="assets")
 
-    @app.get("/{full_path:path}")
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
     async def serve_spa(full_path: str):
         return FileResponse(str(_frontend_dist / "index.html"))
