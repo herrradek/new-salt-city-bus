@@ -62,6 +62,14 @@ async def _download(url: str) -> bytes:
     return stdout
 
 
+def _iter_csv_from_zip(zf, name):
+    """Stream CSV rows from a ZIP entry without loading entire file into memory."""
+    with zf.open(name) as f:
+        # Read line-by-line using TextIOWrapper to avoid loading entire file
+        text_stream = io.TextIOWrapper(f, encoding="utf-8-sig")
+        yield from csv.DictReader(text_stream)
+
+
 def _load_static_gtfs(force: bool = False):
     """Load route/trip/stop mappings from static GTFS ZIP."""
     global _static_loaded, _trip_directions, _trip_headsigns, _relevant_trip_ids, _trip_stop_times
@@ -74,17 +82,13 @@ def _load_static_gtfs(force: bool = False):
 
     zf = zipfile.ZipFile(GTFS_ZIP_PATH)
 
-    def read_csv_file(name):
-        with zf.open(name) as f:
-            text = f.read().decode("utf-8-sig")
-            return list(csv.DictReader(io.StringIO(text)))
-
     new_directions: Dict[str, str] = {}
     new_headsigns: Dict[str, str] = {}
     new_trip_ids: Set[str] = set()
     new_stop_times: Dict[Tuple[str, str], str] = {}
 
-    for row in read_csv_file("trips.txt"):
+    # trips.txt is small — stream it
+    for row in _iter_csv_from_zip(zf, "trips.txt"):
         if row["route_id"] in ("53A", "53B"):
             new_directions[row["trip_id"]] = row["direction_id"]
             new_headsigns[row["trip_id"]] = row.get("trip_headsign", "")
@@ -94,9 +98,12 @@ def _load_static_gtfs(force: bool = False):
     for cfg in MPK_TO_GTFS_STOPS.values():
         all_gtfs_stop_ids.update(cfg["gtfs_stop_ids"])
 
-    for row in read_csv_file("stop_times.txt"):
+    # stop_times.txt is huge (50MB+) — stream and only keep matching rows
+    for row in _iter_csv_from_zip(zf, "stop_times.txt"):
         if row["trip_id"] in new_trip_ids and row["stop_id"] in all_gtfs_stop_ids:
             new_stop_times[(row["trip_id"], row["stop_id"])] = row["arrival_time"]
+
+    zf.close()
 
     _trip_directions.clear()
     _trip_directions.update(new_directions)
